@@ -22,14 +22,6 @@ env_schema:
     name: "关注仓库"
     description: "可选。逗号分隔，例如 owner/repo,owner2/repo2。不填则统计与你相关的 open PR。"
     default_value: ""
-  STALE_DAYS:
-    name: "Stale 天数"
-    description: "多久未更新算 stale。"
-    default_value: "7"
-  RECENT_LIMIT:
-    name: "最近 PR 数量"
-    description: "显示最近 open PR 数量。"
-    default_value: "4"
   OPEN_URL:
     name: "点击打开 URL"
     description: "点击小组件打开的页面。"

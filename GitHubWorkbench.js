@@ -29,8 +29,6 @@ export default async function (ctx) {
   const baseUrl = (env.GITHUB_API_BASE || 'https://api.github.com').replace(/\/$/, '');
   const openUrl = env.OPEN_URL || 'https://github.com/pulls';
   const repos = String(env.REPOS || '').split(',').map(s => s.trim()).filter(Boolean);
-  const staleDays = Number(env.STALE_DAYS || 7);
-  const maxRecent = Number(env.RECENT_LIMIT || 4);
 
   const text = (value, size, weight, color, opts = {}) => ({
     type: 'text',
@@ -197,29 +195,29 @@ export default async function (ctx) {
   try {
     const me = await apiGet('/user');
     const login = me.login;
-    const sinceDate = new Date(Date.now() - staleDays * 86400000).toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
     const base = repos.length ? 'is:pr' : `is:pr involves:${login}`;
 
-    const [open, review, mine, assigned, drafts, stale, mergedToday, recent] = await Promise.all([
+    const [openTotal, closeTotal, mergeTotal, openToday, closeToday, mergeToday] = await Promise.all([
       searchScoped(`${base} is:open archived:false`),
-      searchScoped(`is:pr is:open review-requested:${login} archived:false`),
-      searchScoped(`is:pr is:open author:${login} archived:false`),
-      searchScoped(`is:pr is:open assignee:${login} archived:false`),
-      searchScoped(`${base} is:open draft:true archived:false`),
-      searchScoped(`${base} is:open updated:<${sinceDate} archived:false`),
-      searchScoped(`${repos.length ? 'is:pr' : `is:pr author:${login}`} is:merged merged:>=${today} archived:false`),
-      searchScoped(`${base} is:open archived:false`, maxRecent),
+      searchScoped(`${base} is:closed -is:merged archived:false`),
+      searchScoped(`${base} is:merged archived:false`),
+      searchScoped(`${base} is:open created:>=${today} archived:false`),
+      searchScoped(`${base} is:closed -is:merged closed:>=${today} archived:false`),
+      searchScoped(`${base} is:merged merged:>=${today} archived:false`),
     ]);
 
     const counts = {
-      open: open.total_count || 0,
-      review: review.total_count || 0,
-      mine: mine.total_count || 0,
-      assigned: assigned.total_count || 0,
-      drafts: drafts.total_count || 0,
-      stale: stale.total_count || 0,
-      mergedToday: mergedToday.total_count || 0,
+      total: {
+        open: openTotal.total_count || 0,
+        close: closeTotal.total_count || 0,
+        merge: mergeTotal.total_count || 0,
+      },
+      today: {
+        open: openToday.total_count || 0,
+        close: closeToday.total_count || 0,
+        merge: mergeToday.total_count || 0,
+      },
     };
     const family = String(ctx.widgetFamily || '').toLowerCase();
     return renderWorkbench({
@@ -232,8 +230,6 @@ export default async function (ctx) {
       login,
       repos,
       counts,
-      recent: recent.items || [],
-      maxRecent,
       isSmall: family.includes('small'),
     });
   } catch (e) {
@@ -252,82 +248,56 @@ export default async function (ctx) {
   }
 }
 
-function renderWorkbench({ C, text, icon, row, col, openUrl, login, repos, counts, recent, maxRecent, isSmall }) {
-  const card = (label, value, color, symbol) => col([
-    row([icon(symbol, color, 11), text(label, 9, 'bold', C.dim, { maxLines: 1 }), { type: 'spacer' }], 4),
-    text(value, 22, 'heavy', color, { maxLines: 1, minScale: 0.6 }),
-  ], 2, { flex: 1, padding: [8, 8], borderRadius: 8, backgroundColor: C.panel });
-
-  const item = pr => {
-    const repo = (pr.repository_url || '').split('/repos/')[1] || '';
-    const title = `#${pr.number} ${pr.title || ''}`;
-    const isDraft = pr.draft || String(pr.title || '').toLowerCase().startsWith('draft:');
-    return row([
-      icon(isDraft ? 'circle.dotted' : 'point.3.connected.trianglepath.dotted', isDraft ? C.dim : C.green, 10),
-      col([
-        text(title, 10, 'semibold', C.text, { maxLines: 1, minScale: 0.65 }),
-        text(repo, 9, 'medium', C.dim, { maxLines: 1, minScale: 0.7 }),
-      ], 1, { flex: 1 }),
-    ], 5, { url: pr.html_url });
-  };
-
+function renderWorkbench({ C, text, icon, row, col, openUrl, login, repos, counts, isSmall }) {
   const updated = new Date();
   const time = `${String(updated.getHours()).padStart(2, '0')}:${String(updated.getMinutes()).padStart(2, '0')}`;
   const scope = repos.length ? `${repos.length} repos` : `@${login}`;
-
-  if (isSmall) {
-    return {
-      type: 'widget',
-      url: openUrl,
-      backgroundColor: C.bg,
-      padding: [12, 14],
-      gap: 8,
-      children: [
-        row([
-          icon('point.3.connected.trianglepath.dotted', C.text, 14),
-          text('GitHub', 'subheadline', 'bold', C.text, { maxLines: 1 }),
-          { type: 'spacer' },
-          text(time, 9, 'medium', C.dim),
-        ], 5),
-        row([
-          card('OPEN', counts.open, C.blue, 'arrow.triangle.pull'),
-          card('REVIEW', counts.review, C.orange, 'eye'),
-        ], 6),
-        row([
-          card('MINE', counts.mine, C.purple, 'person.crop.circle'),
-          card('STALE', counts.stale, counts.stale ? C.red : C.dim, 'clock.badge.exclamationmark'),
-        ], 6),
-        text(scope, 9, 'medium', C.dim, { maxLines: 1, minScale: 0.7 }),
-      ],
-    };
-  }
+  const tileHeight = isSmall ? 50 : 56;
+  const valueSize = isSmall ? 18 : 23;
+  const labelSize = isSmall ? 7 : 8;
+  const periodSize = isSmall ? 8 : 9;
+  const headerTitle = isSmall ? 'GitHub PR' : 'GitHub PR Board';
+  const metrics = [
+    { key: 'open', label: 'OPEN', color: C.blue, symbol: 'arrow.triangle.pull' },
+    { key: 'close', label: 'CLOSE', color: C.red, symbol: 'xmark.circle' },
+    { key: 'merge', label: 'MERGE', color: C.green, symbol: 'checkmark.seal' },
+  ];
+  const tile = (period, metric, value) => col([
+    row([
+      icon(metric.symbol, metric.color, isSmall ? 9 : 10),
+      text(metric.label, labelSize, 'bold', C.dim, { maxLines: 1 }),
+    ], 3),
+    text(value, valueSize, 'heavy', metric.color, { maxLines: 1, minScale: 0.55, textAlign: 'center' }),
+    text(period, periodSize, 'semibold', C.dim, { maxLines: 1, textAlign: 'center' }),
+  ], isSmall ? 1 : 2, {
+    flex: 1,
+    height: tileHeight,
+    padding: isSmall ? [6, 6] : [7, 8],
+    borderRadius: 8,
+    backgroundColor: C.panel,
+    alignItems: 'stretch',
+  });
+  const metricRow = (period, values) => row(
+    metrics.map(metric => tile(period, metric, values[metric.key] || 0)),
+    6,
+  );
 
   return {
     type: 'widget',
     url: openUrl,
     backgroundColor: C.bg,
-    padding: [12, 14],
-    gap: 8,
+    padding: isSmall ? [10, 10] : [12, 14],
+    gap: isSmall ? 6 : 8,
     children: [
       row([
-        icon('point.3.connected.trianglepath.dotted', C.text, 15),
-        text('GitHub Workbench', 'headline', 'bold', C.text, { maxLines: 1 }),
+        icon('point.3.connected.trianglepath.dotted', C.text, isSmall ? 13 : 15),
+        text(headerTitle, isSmall ? 'subheadline' : 'headline', 'bold', C.text, { maxLines: 1 }),
         { type: 'spacer' },
         text(scope, 9, 'medium', C.dim, { maxLines: 1, minScale: 0.7 }),
         text(time, 9, 'medium', C.dim),
       ], 5),
-      row([
-        card('OPEN', counts.open, C.blue, 'arrow.triangle.pull'),
-        card('REVIEW', counts.review, C.orange, 'eye'),
-        card('MINE', counts.mine, C.purple, 'person.crop.circle'),
-      ], 6),
-      row([
-        card('ASSIGNED', counts.assigned, C.green, 'target'),
-        card('DRAFT', counts.drafts, C.dim, 'circle.dotted'),
-        card('STALE', counts.stale, counts.stale ? C.red : C.dim, 'clock.badge.exclamationmark'),
-        card('MERGED', counts.mergedToday, C.green, 'checkmark.seal'),
-      ], 6),
-      col((recent || []).slice(0, maxRecent).map(item), 5, { padding: [8, 9], borderRadius: 8, backgroundColor: C.panel }),
+      metricRow('TOTAL', counts.total || {}),
+      metricRow('TODAY', counts.today || {}),
     ],
   };
 }
