@@ -1,0 +1,50 @@
+name: "GitHub Workbench"
+description: "GitHub PR 状态和统计小组件，支持 Token 或 OAuth Device Flow 登录。"
+author: "Codex for dashitongzhi"
+homepage: "https://github.com/dashitongzhi/egern-github-workbench-widget"
+manual: "https://github.com/dashitongzhi/egern-github-workbench-widget#readme"
+icon: point.3.connected.trianglepath.dotted
+
+env_schema:
+  GITHUB_TOKEN:
+    name: "GitHub Token"
+    description: "可选。填写后直接使用。需要能读取目标仓库 Pull Requests。"
+    default_value: ""
+  GITHUB_CLIENT_ID:
+    name: "GitHub OAuth Client ID"
+    description: "可选。用于 GitHub Device Flow 登录。需要在 OAuth App 设置中开启 Device Flow。"
+    default_value: ""
+  GITHUB_SCOPES:
+    name: "OAuth Scopes"
+    description: "Device Flow 请求的 scope。私有仓库建议 repo read:user。"
+    default_value: "repo read:user"
+  REPOS:
+    name: "关注仓库"
+    description: "可选。逗号分隔，例如 owner/repo,owner2/repo2。不填则统计与你相关的 open PR。"
+    default_value: ""
+  STALE_DAYS:
+    name: "Stale 天数"
+    description: "多久未更新算 stale。"
+    default_value: "7"
+  RECENT_LIMIT:
+    name: "最近 PR 数量"
+    description: "显示最近 open PR 数量。"
+    default_value: "4"
+  OPEN_URL:
+    name: "点击打开 URL"
+    description: "点击小组件打开的页面。"
+    default_value: "https://github.com/pulls"
+  REQUEST_TIMEOUT_MS:
+    name: "请求超时毫秒"
+    default_value: "8000"
+
+scriptings:
+  - generic:
+      name: "github-workbench-widget"
+      script_url: "https://raw.githubusercontent.com/dashitongzhi/egern-github-workbench-widget/main/GitHubWorkbench.js"
+      timeout: 30
+      update_interval: 300
+
+widgets:
+  - name: "GitHub Workbench"
+    script_name: "github-workbench-widget"
