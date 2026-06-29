@@ -26,6 +26,10 @@ env_schema:
     name: "点击打开 URL"
     description: "点击小组件打开的页面。"
     default_value: "https://github.com/pulls"
+  CACHE_TTL_MINUTES:
+    name: "缓存分钟数"
+    description: "同一统计结果本地缓存多久。默认 5 分钟，可减少 GitHub API 限流和频繁刷新报错。"
+    default_value: "5"
   REQUEST_TIMEOUT_MS:
     name: "请求超时毫秒"
     default_value: "8000"

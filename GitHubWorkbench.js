@@ -8,6 +8,7 @@
  */
 const STORAGE_TOKEN = 'github_workbench_access_token_v1';
 const STORAGE_DEVICE = 'github_workbench_device_flow_v1';
+const STORAGE_CACHE = 'github_workbench_counts_cache_v1';
 const DEFAULT_GITHUB_CLIENT_ID = 'Ov23licgvm9aj2TFVGhC';
 
 export default async function (ctx) {
@@ -29,6 +30,7 @@ export default async function (ctx) {
   const baseUrl = (env.GITHUB_API_BASE || 'https://api.github.com').replace(/\/$/, '');
   const openUrl = env.OPEN_URL || 'https://github.com/pulls';
   const repos = String(env.REPOS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const cacheTtlMs = Math.max(60, Number(env.CACHE_TTL_MINUTES || 5) * 60) * 1000;
 
   const text = (value, size, weight, color, opts = {}) => ({
     type: 'text',
@@ -165,61 +167,93 @@ export default async function (ctx) {
     Authorization: `Bearer ${auth.token}`,
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  async function apiGet(path) {
-    const resp = await ctx.http.get(path.startsWith('http') ? path : `${baseUrl}${path}`, {
+  async function apiPost(path, body) {
+    const resp = await ctx.http.post(path.startsWith('http') ? path : `${baseUrl}${path}`, {
       timeout,
-      headers: apiHeaders,
+      headers: {
+        ...apiHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
     });
-    if (resp.status === 401 || resp.status === 403) {
+    if (resp.status === 401) {
       if (auth.mode === 'device') ctx.storage.delete(STORAGE_TOKEN);
       throw new Error(`GitHub auth/API error ${resp.status}`);
     }
+    if (resp.status === 403) throw new Error('GitHub API rate limited');
+    if (resp.status && resp.status >= 400) throw new Error(`GitHub API error ${resp.status}`);
     return await resp.json();
   }
-  async function searchOne(query, perPage = 1) {
-    const data = await apiGet(`/search/issues?q=${encodeURIComponent(query)}&per_page=${perPage}&sort=updated&order=desc`);
-    return data || { total_count: 0, items: [] };
+
+  function getCached(scopeKey, maxAge = cacheTtlMs) {
+    const cache = ctx.storage.getJSON(STORAGE_CACHE);
+    if (!cache || cache.scopeKey !== scopeKey || !cache.counts) return null;
+    if (Date.now() - Number(cache.fetchedAt || 0) > maxAge) return null;
+    return cache;
   }
-  async function searchScoped(query, perPage = 1) {
-    if (!repos.length) return await searchOne(query, perPage);
-    const parts = await Promise.all(repos.map(repo => searchOne(`${query} repo:${repo}`, perPage)));
-    const items = parts.flatMap(p => p.items || [])
-      .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
-      .slice(0, perPage);
-    return {
-      total_count: parts.reduce((sum, p) => sum + Number(p.total_count || 0), 0),
-      items,
-    };
+  function setCached(payload) {
+    ctx.storage.setJSON(STORAGE_CACHE, {
+      ...payload,
+      fetchedAt: Date.now(),
+    });
   }
-
-  try {
-    const me = await apiGet('/user');
-    const login = me.login;
-    const today = new Date().toISOString().slice(0, 10);
-    const base = repos.length ? 'is:pr' : `is:pr involves:${login}`;
-
-    const [openTotal, closeTotal, mergeTotal, openToday, closeToday, mergeToday] = await Promise.all([
-      searchScoped(`${base} is:open archived:false`),
-      searchScoped(`${base} is:closed -is:merged archived:false`),
-      searchScoped(`${base} is:merged archived:false`),
-      searchScoped(`${base} is:open created:>=${today} archived:false`),
-      searchScoped(`${base} is:closed -is:merged closed:>=${today} archived:false`),
-      searchScoped(`${base} is:merged merged:>=${today} archived:false`),
-    ]);
-
+  function buildSearchQueries(today) {
+    const bases = repos.length
+      ? repos.map(repo => `is:pr repo:${repo}`)
+      : ['is:pr involves:@me'];
+    const metrics = [
+      ['totalOpen', 'total', 'open', 'is:open'],
+      ['totalClose', 'total', 'close', 'is:closed -is:merged'],
+      ['totalMerge', 'total', 'merge', 'is:merged'],
+      ['todayOpen', 'today', 'open', `is:open created:>=${today}`],
+      ['todayClose', 'today', 'close', `is:closed -is:merged closed:>=${today}`],
+      ['todayMerge', 'today', 'merge', `is:merged merged:>=${today}`],
+    ];
+    return metrics.flatMap(([name, bucket, key, qualifier]) =>
+      bases.map((base, repoIndex) => ({
+        alias: `${name}_${repoIndex}`,
+        bucket,
+        key,
+        query: `${base} ${qualifier} archived:false`,
+      })),
+    );
+  }
+  async function fetchCounts(today) {
+    const searches = buildSearchQueries(today);
+    const variableDefs = searches.map((_, i) => `$q${i}: String!`).join(', ');
+    const fields = searches
+      .map((search, i) => `${search.alias}: search(type: ISSUE, query: $q${i}, first: 0) { issueCount }`)
+      .join('\n');
+    const query = `query GitHubWorkbench(${variableDefs}) {
+      viewer { login }
+      ${fields}
+      rateLimit { remaining resetAt }
+    }`;
+    const variables = Object.fromEntries(searches.map((search, i) => [`q${i}`, search.query]));
+    const payload = await apiPost('/graphql', { query, variables });
+    if (payload.errors && payload.errors.length) {
+      throw new Error(payload.errors[0].message || 'GitHub GraphQL error');
+    }
     const counts = {
-      total: {
-        open: openTotal.total_count || 0,
-        close: closeTotal.total_count || 0,
-        merge: mergeTotal.total_count || 0,
-      },
-      today: {
-        open: openToday.total_count || 0,
-        close: closeToday.total_count || 0,
-        merge: mergeToday.total_count || 0,
-      },
+      total: { open: 0, close: 0, merge: 0 },
+      today: { open: 0, close: 0, merge: 0 },
     };
-    const family = String(ctx.widgetFamily || '').toLowerCase();
+    searches.forEach(search => {
+      const result = payload.data && payload.data[search.alias];
+      counts[search.bucket][search.key] += Number(result && result.issueCount || 0);
+    });
+    return {
+      counts,
+      login: payload.data && payload.data.viewer && payload.data.viewer.login || 'me',
+      rateLimit: payload.data && payload.data.rateLimit,
+    };
+  }
+
+  const family = String(ctx.widgetFamily || '').toLowerCase();
+  const scopeKey = repos.length ? repos.join(',') : '@me';
+  const today = new Date().toISOString().slice(0, 10);
+  const freshCache = getCached(scopeKey);
+  if (freshCache) {
     return renderWorkbench({
       C,
       text,
@@ -227,12 +261,55 @@ export default async function (ctx) {
       row,
       col,
       openUrl,
-      login,
+      login: freshCache.login || 'me',
       repos,
-      counts,
+      counts: freshCache.counts,
       isSmall: family.includes('small'),
+      fetchedAt: freshCache.fetchedAt,
+      cached: true,
+    });
+  }
+
+  try {
+    const data = await fetchCounts(today);
+    setCached({
+      scopeKey,
+      counts: data.counts,
+      login: data.login,
+      rateLimit: data.rateLimit,
+    });
+    return renderWorkbench({
+      C,
+      text,
+      icon,
+      row,
+      col,
+      openUrl,
+      login: data.login,
+      repos,
+      counts: data.counts,
+      isSmall: family.includes('small'),
+      rateLimit: data.rateLimit,
     });
   } catch (e) {
+    const staleCache = getCached(scopeKey, Infinity);
+    if (staleCache) {
+      return renderWorkbench({
+        C,
+        text,
+        icon,
+        row,
+        col,
+        openUrl,
+        login: staleCache.login || 'me',
+        repos,
+        counts: staleCache.counts,
+        isSmall: family.includes('small'),
+        fetchedAt: staleCache.fetchedAt,
+        cached: true,
+        warning: String(e && e.message ? e.message : e),
+      });
+    }
     return {
       type: 'widget',
       url: openUrl,
@@ -248,10 +325,11 @@ export default async function (ctx) {
   }
 }
 
-function renderWorkbench({ C, text, icon, row, col, openUrl, login, repos, counts, isSmall }) {
-  const updated = new Date();
+function renderWorkbench({ C, text, icon, row, col, openUrl, login, repos, counts, isSmall, fetchedAt, cached, warning }) {
+  const updated = fetchedAt ? new Date(fetchedAt) : new Date();
   const time = `${String(updated.getHours()).padStart(2, '0')}:${String(updated.getMinutes()).padStart(2, '0')}`;
   const scope = repos.length ? `${repos.length} repos` : `@${login}`;
+  const status = warning ? 'cache' : (cached ? 'cache' : time);
   const tileHeight = isSmall ? 50 : 56;
   const valueSize = isSmall ? 18 : 23;
   const labelSize = isSmall ? 7 : 8;
@@ -294,7 +372,7 @@ function renderWorkbench({ C, text, icon, row, col, openUrl, login, repos, count
         text(headerTitle, isSmall ? 'subheadline' : 'headline', 'bold', C.text, { maxLines: 1 }),
         { type: 'spacer' },
         text(scope, 9, 'medium', C.dim, { maxLines: 1, minScale: 0.7 }),
-        text(time, 9, 'medium', C.dim),
+        text(status, 9, 'medium', warning ? C.orange : C.dim),
       ], 5),
       metricRow('TOTAL', counts.total || {}),
       metricRow('TODAY', counts.today || {}),
