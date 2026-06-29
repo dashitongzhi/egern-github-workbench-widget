@@ -132,13 +132,15 @@ export default async function (ctx) {
   }
 
   function loginWidget(auth) {
-    const code = auth.state && auth.state.user_code ? auth.state.user_code : 'NO TOKEN';
-    const verify = auth.state && auth.state.verification_uri ? auth.state.verification_uri : 'https://github.com/login/device';
+    const hasDeviceCode = !!(auth.state && auth.state.user_code);
+    const code = hasDeviceCode ? auth.state.user_code : (auth.status === 'missing_auth' ? 'SETUP' : 'WAIT');
+    const verify = hasDeviceCode ? auth.state.verification_uri : 'https://github.com/settings/developers';
     const message = auth.status === 'missing_auth'
-      ? '填 GITHUB_TOKEN，或填 GITHUB_CLIENT_ID 开启 GitHub 设备登录。'
+      ? 'GitHub 登录页不会生成 code。先在模块里填 GITHUB_TOKEN，或填 GITHUB_CLIENT_ID 开启设备登录。'
       : auth.status === 'device_error'
         ? auth.message
-        : '打开 github.com/login/device，输入下面的 code 授权。';
+        : '把下面的 code 输入到 github.com/login/device 授权。';
+    const hint = hasDeviceCode ? 'Tap to open GitHub device login' : 'Tap to open GitHub Developer Settings';
     return {
       type: 'widget',
       url: verify,
@@ -150,7 +152,7 @@ export default async function (ctx) {
         col([
           text(message, 11, 'medium', C.dim, { maxLines: 3 }),
           text(code, 28, 'heavy', C.blue, { textAlign: 'center', maxLines: 1, minScale: 0.6 }),
-          text('Tap to open GitHub device login', 10, 'medium', C.dim, { textAlign: 'center' }),
+          text(hint, 10, 'medium', C.dim, { textAlign: 'center' }),
         ], 8, { padding: 12, borderRadius: 8, backgroundColor: C.panel }),
       ],
     };
