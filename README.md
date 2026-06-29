@@ -3,7 +3,7 @@
 GitHub PR 状态和统计小组件，支持两种登录方式：
 
 - 直接填写 `GITHUB_TOKEN`
-- 填写 `GITHUB_CLIENT_ID` 后使用 GitHub OAuth Device Flow 登录
+- 使用内置 OAuth App 的 GitHub Device Flow 登录
 
 ## 安装
 
@@ -27,14 +27,14 @@ egern:/modules/new?name=GitHub%20Workbench&url=https%3A%2F%2Fraw.githubuserconte
 
 ### 方式二：GitHub 第三方登录
 
-GitHub 的 Device Flow 不需要 `client_secret`，适合 Egern 这种无浏览器回调的小组件。
+GitHub 的 Device Flow 不需要 `client_secret`，适合 Egern 这种无浏览器回调的小组件。模块已经内置公开 `Client ID`，默认可以直接使用。
 
-1. 到 GitHub Developer Settings 创建 OAuth App。
-2. 开启 Device Flow。
-3. 把 OAuth App 的 Client ID 填到 `GITHUB_CLIENT_ID`。
-4. 小组件会显示一次性 code。
-5. 打开 `https://github.com/login/device` 输入 code 授权。
-6. 授权完成后，小组件会把 access token 存入 Egern 本地 `ctx.storage`。
+1. 添加模块后先把小组件放到桌面。
+2. 小组件会显示一次性 code。
+3. 打开 `https://github.com/login/device` 输入 code 授权。
+4. 授权完成后，小组件会把 access token 存入 Egern 本地 `ctx.storage`。
+
+如果你想使用自己的 GitHub OAuth App，可以创建 OAuth App、开启 Device Flow，然后把它的 Client ID 填到 `GITHUB_CLIENT_ID` 覆盖默认值。默认内置的公开 Client ID 是 `Ov23licgvm9aj2TFVGhC`。
 
 注意：`https://github.com/login/device` 页面只负责输入 code，不会生成 code。code 是 Egern 小组件调用 GitHub Device Flow 后显示出来的。
 

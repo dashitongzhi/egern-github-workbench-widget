@@ -12,7 +12,7 @@ env_schema:
     default_value: ""
   GITHUB_CLIENT_ID:
     name: "GitHub OAuth Client ID"
-    description: "可选。用于 GitHub Device Flow 登录。需要在 OAuth App 设置中开启 Device Flow。"
+    description: "可选覆盖项。默认已内置公共 Client ID；只有想使用自己的 OAuth App 时才需要填写。"
     default_value: ""
   GITHUB_SCOPES:
     name: "OAuth Scopes"

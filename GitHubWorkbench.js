@@ -3,11 +3,12 @@
  *
  * Auth modes:
  * 1. GITHUB_TOKEN: paste a classic/fine-grained token in the module env.
- * 2. GITHUB_CLIENT_ID: use GitHub OAuth Device Flow. The token is stored in
- *    Egern's local ctx.storage after authorization.
+ * 2. OAuth Device Flow: uses the bundled public client id by default. Set
+ *    GITHUB_CLIENT_ID only when you want to use your own OAuth App.
  */
 const STORAGE_TOKEN = 'github_workbench_access_token_v1';
 const STORAGE_DEVICE = 'github_workbench_device_flow_v1';
+const DEFAULT_GITHUB_CLIENT_ID = 'Ov23licgvm9aj2TFVGhC';
 
 export default async function (ctx) {
   const env = ctx.env || {};
@@ -77,7 +78,7 @@ export default async function (ctx) {
   }
 
   async function getDeviceState() {
-    const clientId = String(env.GITHUB_CLIENT_ID || '').trim();
+    const clientId = String(env.GITHUB_CLIENT_ID || DEFAULT_GITHUB_CLIENT_ID).trim();
     if (!clientId) return { status: 'missing_auth' };
 
     let state = ctx.storage.getJSON(STORAGE_DEVICE);
@@ -136,7 +137,7 @@ export default async function (ctx) {
     const code = hasDeviceCode ? auth.state.user_code : (auth.status === 'missing_auth' ? 'SETUP' : 'WAIT');
     const verify = hasDeviceCode ? auth.state.verification_uri : 'https://github.com/settings/developers';
     const message = auth.status === 'missing_auth'
-      ? 'GitHub 登录页不会生成 code。先在模块里填 GITHUB_TOKEN，或填 GITHUB_CLIENT_ID 开启设备登录。'
+      ? 'GitHub 登录页不会生成 code。先填 GITHUB_TOKEN，或配置可用的 OAuth Client ID。'
       : auth.status === 'device_error'
         ? auth.message
         : '把下面的 code 输入到 github.com/login/device 授权。';
